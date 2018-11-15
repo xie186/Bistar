@@ -1,0 +1,393 @@
+
+---
+title: "Bisulfite-sequencing preprocessing report"
+author: "iCONICS"
+date: "`r format(Sys.Date(), '%d %B, %Y')`"
+output:
+    html_document:
+        theme: lumen
+        toc: true
+        toc_float:
+            collapsed: false
+        df_print: paged
+params:
+    configfile: null
+---
+
+<style>
+    body .main-container {
+        max-width: 100%;
+    }
+    h1.title {
+        text-align: center;
+        color: DarkRed;
+    }
+    h1, h2, h3 {
+        color: DarkBlue;
+    }
+    hr {
+        height: 10px;
+        border: 0;
+        box-shadow: 0 10px 10px -10px #8c8b8b inset;
+    }
+    table {
+        width: 100%;
+    }
+    th {
+        background-color: LightBlue;
+    }
+    tr:nth-child(odd) {
+        background-color: #f2f2f2;
+    }
+    tr:hover {
+        background-color: LightGreen;
+    }
+</style>
+
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo=T)
+library(ggplot2)
+config <- yaml::yaml.load_file(params$configfile)
+```
+
+<hr>
+
+## Run info
+
+
+```{r summary, echo=F, results="asis"}
+samples <- names(config$fastq_of)
+
+# If no target kit name provided set a default value
+target_kit <- config$target_kit
+if (is.null(target_kit)) {
+    target_kit <- if (is.null(config$target_bed)) "no target regions provided" else "unknown"
+}
+
+if (is.null(config$read_length)) {
+    config$read_length <- "Unknown"
+}
+
+run_info <- data.frame(
+    "number of samples"=length(samples),
+    "paired end"=config$paired_end,
+    "read length"=paste(config$read_length, "bp"),
+    "RRBS"=config$rrbs,
+    "target kit"=target_kit,
+    "reference build"=config$ref_build,
+    "directional library"=config$directional_library,
+    check.names=F)
+knitr::kable(t(run_info), align="c", col.names=NA)
+```
+
+### Samples
+```{r samples, echo=F, comment=""}
+writeLines(samples)
+```
+
+<hr>
+
+## QC of reads
+
+Raw reads on the left and after trimming on the right
+
+```{r, echo=F, out.width="50%"}
+fastqc_plots_dir     <- file.path(config$outdir, "fastqc", "multiqc_plots", "svg")
+base_quality_svg     <- file.path(fastqc_plots_dir, "mqc_fastqc_per_base_sequence_quality_plot_1.svg")
+seq_mean_quality_svg <- file.path(fastqc_plots_dir, "mqc_fastqc_per_sequence_quality_scores_plot_1.svg")
+gc_content_svg       <- file.path(fastqc_plots_dir, "mqc_fastqc_per_sequence_gc_content_plot_Percentages.svg")
+adapter_content_svg  <- file.path(fastqc_plots_dir, "mqc_fastqc_adapter_content_plot_1.svg")
+
+
+fastqc_trim_plots_dir     <- file.path(config$outdir, "fastqc_post_trimming", "multiqc_plots", "svg")
+base_quality_trim_svg     <- file.path(fastqc_trim_plots_dir, "mqc_fastqc_per_base_sequence_quality_plot_1.svg")
+seq_mean_quality_trim_svg <- file.path(fastqc_trim_plots_dir, "mqc_fastqc_per_sequence_quality_scores_plot_1.svg")
+gc_content_trim_svg       <- file.path(fastqc_trim_plots_dir, "mqc_fastqc_per_sequence_gc_content_plot_Percentages.svg")
+adapter_content_trim_svg  <- file.path(fastqc_trim_plots_dir, "mqc_fastqc_adapter_content_plot_1.svg")
+
+knitr::include_graphics(c(base_quality_svg, base_quality_trim_svg))
+knitr::include_graphics(c(seq_mean_quality_svg, seq_mean_quality_trim_svg))
+knitr::include_graphics(c(gc_content_svg, gc_content_trim_svg))
+
+# Message to plot if FASTQC has not created a plot (no significant adapter contamination detected)
+no_adapter_text = paste("FastQC adapter contamination:\n", "no plot generated because adapter\n", " content < 0.1 % for all samples")
+
+if (file.exists(adapter_content_svg)) {
+    knitr::include_graphics(adapter_content_svg)
+} else {
+    ggplot() + annotate("text", x=4, y=25, size=4, label=no_adapter_text) + theme_void()
+}
+
+if (file.exists(adapter_content_trim_svg)) {
+    knitr::include_graphics(adapter_content_trim_svg)
+} else {
+    ggplot() + annotate("text", x=4, y=25, size=4, label=no_adapter_text) + theme_void()
+}
+```
+
+<hr>
+
+## Read trimming
+
+* Goals:
+    - remove a few basepairs at read ends if there is a methylation bias e.g. post-fragmentation repair-bias
+    - trim low quality bases at read ends
+    - remove adapters
+
+
+### Trim Galore parameters
+
+```{r trim_galore_parameters, echo=F}
+
+adapter_r1 <- config$trim_galore$adapter_r1
+adapter_r2 <- config$trim_galore$adapter_r2
+if (is.null(adapter_r1)) {
+    adapter_r1 <- "not provided, Trim Galore default"
+}
+if (is.null(adapter_r2)) {
+    adapter_r2 <- if (config$paired_end) "not provided, Trim Galore default" else "NA (single-end)"
+}
+
+trim_params <- data.frame(
+    "FASTQ phred (33|64)"=config$phred,
+    "adapter read 1"=adapter_r1,
+    "adapter read 2"=adapter_r2,
+    "error rate"=config$trim_galore$error_rate,
+    "minimum length"=config$trim_galore$min_length,
+    "quality"=config$trim_galore$quality,
+    "stringency"=config$trim_galore$stringency,
+    "clip R1 5' (bp)"=if (is.null(config$trim_galore$clip_r1_5p)) 0 else config$trim_galore$clip_r1_5p,
+    "clip R2 5' (bp)"=if (is.null(config$trim_galore$clip_r2_5p)) 0 else config$trim_galore$clip_r2_5p,
+    "clip R1 3' (bp)"=if (is.null(config$trim_galore$clip_r1_3p)) 0 else config$trim_galore$clip_r1_3p,
+    "clip R2 3' (bp)"=if (is.null(config$trim_galore$clip_r2_3p)) 0 else config$trim_galore$clip_r2_3p,
+    "trim 'N's"=config$trim_galore$trim_n,
+    check.names=F)
+knitr::kable(t(trim_params), align="c", col.names=NA)
+```
+
+```{r trim_galore_plots, echo=F, out.width="100%"}
+trim_galore_plots_dir   <- file.path(config$outdir, "trim_galore", "multiqc_plots", "svg")
+trim_length_counts_svg  <- file.path(trim_galore_plots_dir, "mqc_cutadapt_plot_Counts.svg")
+trim_length_obs_exp_svg <- file.path(trim_galore_plots_dir, "mqc_cutadapt_plot_Obs_Exp.svg")
+
+knitr::include_graphics(trim_length_counts_svg)
+knitr::include_graphics(trim_length_obs_exp_svg)
+```
+
+<hr>
+
+## Read alignment
+
+```{r, echo=F, out.width="100%"}
+bismark_alignment_svg <- file.path(config$outdir, "bismark_bowtie2", "multiqc_plots", "svg", "mqc_bismark_alignment_1.svg")
+knitr::include_graphics(bismark_alignment_svg)
+```
+
+<hr>
+
+## PCR bias correction
+
+```{r, echo=F, out.width="100%"}
+bismark_deduplication_svg <- file.path(config$outdir, "bam", "multiqc_plots", "svg", "mqc_bismark_deduplication_1.svg")
+if ( config$use_bismark_deduplicate == FALSE ) {
+    cat("PCR bias correction was not applied because at least one of the following flags was set: --rrbs or --no-deduplication.")
+
+} else {
+    knitr::include_graphics(bismark_deduplication_svg)
+}
+```
+
+<hr>
+
+## Read coverage
+
+Read coverage is computed after PCR bias correction if the deduplication is done otherwise after alignment.
+
+```{r coverage_title, comment="", echo=F, results="asis"}
+if (is.null(config$target_bed)) {
+    cat("Coverage computed on the whole reference genome since no target BED was provided.")
+} else {
+    cat("Coverage computed only on the target regions listed by the provided BED file.")
+}
+```
+
+```{r coverage_plots, comment="", echo=F, results="asis", out.width="100%"}
+if (is.null(config$target_bed)) {
+
+    # Path to table
+    picard_wgs_metrics_txt <- file.path(config$outdir, "picard_coverage", "multiqc_data", "multiqc_picard_wgsmetrics.txt")
+
+    # Load table
+    df_wgs_metrics <- read.csv(picard_wgs_metrics_txt, sep="\t", header=T)
+
+    # Keep only columns of interest: Sample + PCT_<X>X
+    cols_to_keep = c("Sample", "PCT_1X", "PCT_5X", "PCT_10X", "PCT_15X",
+                     "PCT_20X", "PCT_25X", "PCT_30X", "PCT_40X", "PCT_50X",
+                     "PCT_60X", "PCT_70X", "PCT_80X", "PCT_90X", "PCT_100X")
+    df_wgs_metrics <- df_wgs_metrics[, cols_to_keep]
+
+    # Simplify column names, e.g. "PCT_20X" -> "20X"
+    names(df_wgs_metrics) <- sub("PCT_", expression(""), names(df_wgs_metrics), fixed=T)
+
+    # Reformat table (to simplify plotting) into 3 columns: Sample, Depth and Proportion
+    df_wgs_metrics <- reshape2::melt(df_wgs_metrics, id.vars="Sample", variable.name="Depth", value.name="Proportion")
+
+    # Rescale proportions from [0, 1] to [0, 100]
+    df_wgs_metrics$Proportion <- df_wgs_metrics$Proportion * 100
+
+    # Create plot
+    ggplot(data=df_wgs_metrics, aes(x=Depth, y=Proportion), xlab=expression(phantom("") >= df_wgs_metrics$Depth)) +
+        geom_bar(aes(fill=Sample), stat="identity", position="dodge") + xlab(expression("Depth" >= "")) + ylab("Proportion (%)")
+
+} else {
+
+    # Path to table
+    picard_hs_metrics_txt <- file.path(config$outdir, "picard_coverage", "multiqc_data", "multiqc_picard_HsMetrics.txt")
+
+    # Load table
+    df_hs_metrics <- read.csv(picard_hs_metrics_txt, sep="\t", header=T)
+
+    # Keep only columns of interest: Sample + PCT_TARGET_BASES_<X>X
+    cols_to_keep <- c("Sample", names(df_hs_metrics)[startsWith(names(df_hs_metrics), "PCT_TARGET_BASES_")])
+    df_hs_metrics <- df_hs_metrics[, cols_to_keep]
+
+    # Simplify column names, e.g. "PCT_TARGET_BASES_20X" -> "20X"
+    names(df_hs_metrics) <- sub("PCT_TARGET_BASES_", expression(""), names(df_hs_metrics), fixed=T)
+
+    # Reformat table (to simplify plotting) into 3 columns: Sample, Depth and Proportion
+    df_hs_metrics <- reshape2::melt(df_hs_metrics, id.vars="Sample", variable.name="Depth", value.name="Proportion")
+
+    # Rescale proportions from [0, 1] to [0, 100]
+    df_hs_metrics$Proportion <- df_hs_metrics$Proportion * 100
+
+    # Create plot
+    ggplot(data=df_hs_metrics, aes(x=Depth, y=Proportion), xlab=expression(phantom("") >= df_hs_metrics$Depth)) +
+        geom_bar(aes(fill=Sample), stat="identity", position="dodge") + xlab(expression("Depth" >= "")) + ylab("Proportion (%)")
+}
+```
+
+<hr>
+
+## Cytosines
+
+```{r cytosine_totals, echo=F}
+meth_ext_txt <- file.path(config["outdir"], "bismark_methylation_extractor", "multiqc_data", "multiqc_bismark_methextract.txt")
+df_meth_ext <- read.csv(meth_ext_txt, sep="\t", header=T)
+
+# Dataframe of the total cytosine counts by type of cytosine
+df_cyt_tot <- df_meth_ext[, c("Sample", "total_c")]
+names(df_cyt_tot)[2] <- "C"  # Rename column "total_c" to "C"
+df_cyt_tot[, "CHH"] <- df_meth_ext[, "unmeth_chh"] + df_meth_ext[, "meth_chh"]
+df_cyt_tot[, "CHG"] <- df_meth_ext[, "unmeth_chg"] + df_meth_ext[, "meth_chg"]
+df_cyt_tot[, "CpG"] <- df_meth_ext[, "unmeth_cpg"] + df_meth_ext[, "meth_cpg"]
+
+# Reformat table (to simplify plotting) into 3 columns: 'Sample', 'cytosine_type', and 'Total'
+df_cyt_tot <- reshape2::melt(df_cyt_tot, id.vars="Sample", variable.name="cytosine_type", value.name="Total")
+
+# Create plot
+ggplot(df_cyt_tot, aes(x=cytosine_type, y=Total)) +
+    geom_bar(aes(fill=Sample), stat="identity", position="dodge") +
+    xlab("Cytosine type") +
+    ylab("Total")
+```
+
+<hr>
+
+## Mean methylation
+
+```{r methylation_proportions, echo=F}
+# Dataframe of the methylation proportions by type of cytosines
+df_meth_prop <- df_meth_ext[, c("Sample", "percent_cpg_meth", "percent_chg_meth", "percent_chh_meth")]
+
+# Simplify names
+names(df_meth_prop) <- c("Sample", "CpG", "CHG", "CHH")
+
+# Reformat table (to simplify plotting) into 3 columns: 'Sample', 'cytosine_type', and 'Proportion'
+df_meth_prop <- reshape2::melt(df_meth_prop, id.vars="Sample", variable.name="cytosine_type", value.name="Proportion")
+
+ggplot(df_meth_prop, aes(x=cytosine_type, y=Proportion)) +
+    geom_bar(aes(fill=Sample), stat="identity", position="dodge") +
+    xlab("Cytosine type") +
+    ylab("Methylation proportion (%)")
+```
+
+<hr>
+
+## Methylation bias
+
+```{r methylation_bias, echo=F, out.width="100%"}
+
+meth_bias_plot_dir <- file.path(config$outdir, "bismark_methylation_extractor", "multiqc_plots", "svg")
+meth_bias_data_dir <- file.path(config$outdir, "bismark_methylation_extractor", "multiqc_data")
+meth_bias_r1_svg   <- file.path(meth_bias_plot_dir, "mqc_bismark_mbias_CpG_R1.svg")
+meth_bias_r1_txt   <- file.path(meth_bias_data_dir, "mqc_bismark_mbias_CpG_R1.txt")
+
+if (config$paired_end) {
+    meth_bias_r2_svg <- file.path(meth_bias_plot_dir, "mqc_bismark_mbias_CpG_R2.svg")
+    meth_bias_r2_txt <- file.path(meth_bias_data_dir, "mqc_bismark_mbias_CpG_R2.txt")
+}
+
+# Load
+df_meth_r1 <- read.csv(meth_bias_r1_txt, sep="\t", header=T, check.names=F)
+if (config$paired_end) {
+    df_meth_r2 <- read.csv(meth_bias_r2_txt, sep="\t", header=T, check.names=F)
+}
+
+# Remove sample ID column
+df_meth_r1 <- df_meth_r1[, -1]
+if (config$paired_end) {
+    df_meth_r2 <- df_meth_r2[, -1]
+}
+
+# Compute methylation means
+mean_meth_r1 <- colMeans(df_meth_r1)
+if (config$paired_end) {
+    mean_meth_r2 <- colMeans(df_meth_r2)
+}
+
+# Because of trimming R1 and R2 reads don't necessarily have the same lengths
+if (config$paired_end) {
+    max_position <- max(length(mean_meth_r1), length(mean_meth_r2))
+    # Make the mean vectors the same length by filling with 'NA's
+    length(mean_meth_r1) <- max_position
+    length(mean_meth_r2) <- max_position
+} else {
+    max_position <- length(mean_meth_r1)
+}
+
+# Combine as one dataframe
+if (config$paired_end) {
+    df_meth_cpg <- data.frame("position"=1:max_position, "R1"=mean_meth_r1, "R2"=mean_meth_r2)
+} else {
+    df_meth_cpg <- data.frame("position"=1:max_position, "R1"=mean_meth_r1)
+}
+```
+
+### R1 reads
+
+```{r methylation_bias_r1, echo=F, out.width="100%"}
+knitr::include_graphics(meth_bias_r1_svg)
+```
+
+```{r methylation_bias_r2_title, comment="", echo=F, results="asis"}
+if (config$paired_end) {
+    cat("### R2 reads")
+}
+```
+
+```{r methylation_bias_r2, echo=F, out.width="100%"}
+if (config$paired_end) {
+    knitr::include_graphics(meth_bias_r2_svg)
+}
+```
+
+### Table
+
+Table of the mean methylation per position in the reads.
+It is used to help decide how many bases to trim if there is a bias at any end.
+In paired-end sequencing *NA* values can appear at the end of the table because R1 and R2 reads can have a different maximum length after trimming.
+
+```{r, echo=F, results="asis"}
+knitr::kable(df_meth_cpg, row.names=F)
+```

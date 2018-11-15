@@ -1,0 +1,201 @@
+"""
+Differential CpG methylation analysis pipeline.
+
+See README.md for documentation.
+"""
+
+import os
+
+
+# Output paths are relative to this directory
+workdir: config["outdir"]
+
+# -----------------------------------------------------------------------------
+# Output files
+bs_rds                  = "bs.rds"
+create_bsseq_object_log = "logs/logs/create_bsseq_object.log"
+dmrs_rds                = "dmrs.rds"
+dmrseq_log              = "logs/dmrseq.log"
+annotated_dmrs_bed      = "annotated_dmrs.bed"
+annotate_dmrs_log       = "logs/annotate_dmrs.log"
+dendrogram_svg          = "dendrogram_of_methylation_ratios.svg"
+pca_svg                 = "pca_of_methylation_ratios.svg"
+clustering_log          = "logs/clustering_of_methylation_ratios.log"
+dmr_report              = "dmr_report.html"
+dmr_report_log          = "logs/dmr_report.log"
+
+# Create '<outdir>/logs' directory if not existing
+if not os.path.isdir("logs"):
+    os.mkdir("logs")
+
+# -----------------------------------------------------------------------------
+# Rule to run the complete pipeline
+
+
+rule all:
+    input:
+        dmr_report
+
+# -----------------------------------------------------------------------------
+# Rule to run all the pipeline except the annotation that requires a web
+# connection
+
+
+rule all_except_annotation:
+    input:
+        dendrogram_svg,
+        pca_svg,
+        dmrs_rds
+
+# -----------------------------------------------------------------------------
+# STEP 1 - Load methylation counts and covariates into R as a BSseq object
+
+
+rule create_bsseq_object:
+    input:
+        script         = srcdir("create_bsseq_object.R"),
+        cpg_reports    = config["cpg_report_of_sample"].values(),
+        covariates_tsv = config["covariates_tsv"]
+    output:
+        bs_rds
+    log:
+        create_bsseq_object_log
+    params:
+        samples         = " ".join(config["cpg_report_of_sample"].keys()),
+        test_covariate  = config["test_covariate"],
+        outdir          = config["outdir"],
+        min_samples     = config["min_samples"],
+        merge_comp_cpgs = "--do-not-merge-complementary-cpgs" if config["merge_complementary_cpgs"] is False else ""
+    shell:
+        """
+        Rscript {input.script} \
+            --samples {params.samples} \
+            --cpg-reports {input.cpg_reports} \
+            --covariates-tsv {input.covariates_tsv} \
+            --test-covariate {params.test_covariate} \
+            --min-samples {params.min_samples} \
+            --outdir {params.outdir} \
+            --threads {config[bsseq_threads]} \
+            {params.merge_comp_cpgs} \
+        &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 2 - Compute hierarchical clustering and PCA of methylation counts for
+# CpGs that are measured in all samples and create SVG plots.
+
+
+rule clustering_of_methylation_ratios:
+    input:
+        script = srcdir("clustering_of_methylation_ratios.R"),
+        bs_rds = bs_rds
+    output:
+        dendrogram_svg,
+        pca_svg
+    log:
+        clustering_log
+    params:
+        test_covariate = config["test_covariate"]
+    shell:
+        """
+        Rscript {input.script} \
+            --bs-rds {input.bs_rds} \
+            --test-covariate {params.test_covariate} \
+            --outdir {config[outdir]} \
+        &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 3 - Compute DMRs with dmrseq
+
+
+rule dmrseq:
+    input:
+        script = srcdir("dmrseq.R"),
+        bs_rds = bs_rds
+    output:
+        dmrs_rds
+    log:
+        dmrseq_log
+    params:
+        test_covariate = config["test_covariate"],
+        max_gap        = config["max_gap"],
+        min_cpgs       = config["min_cpgs"],
+        cutoff         = config["cutoff"],
+        bp_span        = config["bp_span"],
+        min_in_span    = config["min_in_span"],
+        max_gap_smooth = config["max_gap_smooth"],
+        max_perms      = config["max_perms"],
+        smooth         = "--no-smoothing" if config["smooth"] is False else "",
+        adjust         = "--adjust-covariates %s" % " ".join(config["adjust_covariates"]) if config["adjust_covariates"] is not None else "",
+        match          = "--match-covariate %s" % config["match_covariate"] if config["match_covariate"] is not None else ""
+    shell:
+        """
+        Rscript {input.script} \
+            --bs-rds {input.bs_rds} \
+            --test-covariate {params.test_covariate} \
+            --threads {config[dmrseq_threads]} \
+            --max-gap {params.max_gap} \
+            --min-cpgs {params.min_cpgs} \
+            --cutoff {params.cutoff} \
+            --bp-span {params.bp_span} \
+            --min-in-span {params.min_in_span} \
+            --max-gap-smooth {params.max_gap_smooth} \
+            --max-perms {params.max_perms} \
+            --outdir {config[outdir]} \
+            {params.smooth} \
+            {params.adjust} \
+            {params.match} \
+        &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 4 - Annotate the DMRs with Goldmine
+
+
+rule annotate_dmrs:
+    input:
+        script   = srcdir("annotate_dmrs.R"),
+        dmrs_rds = dmrs_rds
+    output:
+        annotated_dmrs_bed
+    log:
+        annotate_dmrs_log
+    params:
+        ref_build = config["ref_build"],
+        sync      = "--goldmine-sync" if config["goldmine_sync"] is True else ""
+    shell:
+        """
+        Rscript {input.script} \
+            --dmrs-rds {input.dmrs_rds} \
+            --outdir {config[outdir]} \
+            --ref-build {params.ref_build} \
+            --goldmine-dir {config[goldmine_dir]} \
+            {params.sync} \
+        &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 5 - QC report
+
+
+rule dmr_html_report:
+    input:
+        report_template    = srcdir("dmr_report.Rmd"),
+        config_yaml        = "dmr_config.yaml",
+        dendrogram_svg     = dendrogram_svg,
+        pca_svg            = pca_svg,
+        annotated_dmrs_bed = annotated_dmrs_bed
+    output:
+        dmr_report = dmr_report
+    log:
+        dmr_report_log
+    shell:
+        """
+        Rscript -e "rmarkdown::render(knit_root_dir='{config[outdir]}', \
+                                      input='{input.report_template}', \
+                                      output_dir='{config[outdir]}', \
+                                      output_file='{output.dmr_report}', \
+                                      params=list(configfile='{input.config_yaml}'))" \
+        &> >(tee {log})
+        """

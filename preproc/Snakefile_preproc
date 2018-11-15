@@ -1,0 +1,619 @@
+"""
+Bisulfite-sequencing preprocessing pipeline.
+
+See README.md for documentation.
+"""
+
+import os
+import re
+import shutil
+
+
+# Output paths are relative to this directory
+workdir: config["outdir"]
+
+# The couples SAMPLE/LANE to process as two ordered lists
+SAMPLES, LANES = zip(*[(sample, lane) for sample in config["fastq_of"]
+                                      for lane in config["fastq_of"][sample]])
+
+# -----------------------------------------------------------------------------
+# Utility functions
+
+def get_r1(wildcards):
+    return config["fastq_of"][wildcards.sample][wildcards.lane]["R1"]
+
+def get_r2(wildcards):
+    return config["fastq_of"][wildcards.sample][wildcards.lane]["R2"]
+
+def get_temp_dir():
+    temp_dir = "tmp"
+    if not os.path.isdir(temp_dir):
+        os.makedirs(temp_dir)
+    return temp_dir
+
+# -----------------------------------------------------------------------------
+# Rule to run the complete pipeline by requesting the final report
+
+preproc_report = "preproc_report.html"
+
+rule all:
+    input:
+        preproc_report
+
+# -----------------------------------------------------------------------------
+# STEP 1 - FastQC on raw reads
+
+fastqc_dir    = "fastqc"
+fastqc_subdir = os.path.join(fastqc_dir, "{sample}")
+
+# Outputs
+fastqc_done = os.path.join(fastqc_subdir, "{sample}_{lane}_fastqc.done")
+fastqc_log  = os.path.join(fastqc_subdir, "{sample}_{lane}_fastqc.log")
+
+
+rule fastqc:
+    priority: 1
+    input:
+        [get_r1, get_r2] if config["paired_end"] is True else get_r1
+    output:
+        touch(fastqc_done)
+    log:
+        fastqc_log
+    params:
+        outdir  = fastqc_subdir,
+        tempdir = get_temp_dir()
+    shell:
+        """
+        fastqc \
+            --format fastq \
+            --noextract \
+            --nogroup \
+            --quiet \
+            --threads {config[fastqc][threads]} \
+            --dir {params.tempdir} \
+            --outdir {params.outdir} \
+            {input} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 2 - Trim reads for quality, repair bias and adapters with Trim Galore
+
+# Outputs
+trim_dir       = "trim_galore"
+trim_subdir    = os.path.join(trim_dir, "{sample}")
+r1_trimmed     = os.path.join(trim_subdir, "{sample}_{lane}_R1.fq.gz")
+r2_trimmed     = os.path.join(trim_subdir, "{sample}_{lane}_R2.fq.gz")
+r1_trim_report = os.path.join(trim_subdir, "{sample}_{lane}_R1_trimming_report.txt")
+r2_trim_report = os.path.join(trim_subdir, "{sample}_{lane}_R2_trimming_report.txt")
+trim_log       = os.path.join(trim_subdir, "{sample}_{lane}.log")
+
+
+def get_trim_galore_outputs(wildcards):
+    """
+    Since we cannot choose the output filenames in Trim Galore, this function
+    infers the outputs that will be created:
+        - in paired-end sequencing: 2 FASTQ + 2 .txt reports
+        - in single-end sequencing: 1 FASTQ + 1 .txt report
+    """
+    outdir       = trim_subdir.format(sample=wildcards.sample)
+    r1_fn        = os.path.basename(get_r1(wildcards))
+    r1_fn_no_ext = re.sub("(.fastq|.fq)(.gz)?$", "", r1_fn)
+    r1_report    = os.path.join(outdir, r1_fn + "_trimming_report.txt")
+
+    if config["paired_end"] is True:
+        r2_fn        = os.path.basename(get_r2(wildcards))
+        r2_fn_no_ext = re.sub("(.fastq|.fq)(.gz)?$", "", r2_fn)
+        r1_trim      = os.path.join(outdir, r1_fn_no_ext + "_val_1.fq.gz")
+        r2_trim      = os.path.join(outdir, r2_fn_no_ext + "_val_2.fq.gz")
+        r2_report    = os.path.join(outdir, r2_fn + "_trimming_report.txt")
+        outputs      = [r1_trim, r1_report, r2_trim, r2_report]
+    else:
+        r1_trim = os.path.join(outdir, r1_fn_no_ext + "_trimmed.fq.gz")
+        outputs = [r1_trim, r1_report]
+
+    return outputs
+
+
+rule trim_galore:
+    priority: 2
+    input:
+        [get_r1, get_r2] if config["paired_end"] is True else get_r1
+    output:
+        [r1_trimmed, r1_trim_report, r2_trimmed, r2_trim_report] if config["paired_end"] is True else [r1_trimmed, r1_trim_report]
+    log:
+        trim_log
+    params:
+        quality    = config["trim_galore"]["quality"],
+        phred      = config["phred"],
+        stringency = config["trim_galore"]["stringency"],
+        min_length = config["trim_galore"]["min_length"],
+        outdir     = trim_subdir,
+        error_rate = config["trim_galore"]["error_rate"],
+        # Output files before we rename them
+        outputs = get_trim_galore_outputs,
+        # Optional flags
+        paired     = "--paired" if config["paired_end"] is True else "",
+        rrbs       = "--rrbs"   if config["rrbs"]       is True else "",
+        adapter_r1 = "--adapter %s"             % config["trim_galore"]["adapter_r1"] if config["trim_galore"]["adapter_r1"] is not None else "",
+        clip_r1_5p = "--clip_R1 %i"             % config["trim_galore"]["clip_r1_5p"] if config["trim_galore"]["clip_r1_5p"] is not None else "",
+        clip_r1_3p = "--three_prime_clip_R1 %i" % config["trim_galore"]["clip_r1_3p"] if config["trim_galore"]["clip_r1_3p"] is not None else "",
+        max_n      = "--max_n %i"               % config["trim_galore"]["max_n"]      if config["trim_galore"]["max_n"]      is not None else "",
+        adapter_r2 = "--adapter2 %s"            % config["trim_galore"]["adapter_r2"] if config["paired_end"] is True and config["trim_galore"]["adapter_r2"] is not None else "",
+        clip_r2_5p = "--clip_R2 %i"             % config["trim_galore"]["clip_r2_5p"] if config["paired_end"] is True and config["trim_galore"]["clip_r2_5p"] is not None else "",
+        clip_r2_3p = "--three_prime_clip_R2 %i" % config["trim_galore"]["clip_r2_3p"] if config["paired_end"] is True and config["trim_galore"]["clip_r2_3p"] is not None else "",
+        trim_n     = "--trim-n" if config["trim_galore"]["trim_n"] is True else ""
+    run:
+        shell(
+        """
+        trim_galore \
+            --gzip \
+            {params.paired} \
+            {params.rrbs} \
+            --quality {params.quality} \
+            --phred{params.phred} \
+            --stringency {params.stringency} \
+            --length {params.min_length} \
+            --output_dir {params.outdir} \
+            -e {params.error_rate} \
+            {params.adapter_r1} \
+            {params.adapter_r2} \
+            {params.max_n} \
+            {params.trim_n} \
+            {params.clip_r1_5p} \
+            {params.clip_r2_5p} \
+            {params.clip_r1_3p} \
+            {params.clip_r2_3p} \
+            {input} \
+            &> >(tee {log})
+        """)
+
+        # Rename output files
+        shell("mv {params.outputs[0]} {output[0]}")
+        shell("mv {params.outputs[1]} {output[1]}")
+
+        if config["paired_end"] is True:
+            shell("mv {params.outputs[2]} {output[2]}")
+            shell("mv {params.outputs[3]} {output[3]}")
+
+# -----------------------------------------------------------------------------
+# STEP 3 - FastQC on trimmed reads
+
+# Outputs
+fastqc_trim_dir    = "fastqc_post_trimming"
+fastqc_trim_subdir = os.path.join(fastqc_trim_dir, "{sample}")
+fastqc_trim_outputs = [
+    os.path.join(fastqc_trim_subdir, "{sample}_{lane}_R1_fastqc.html"),
+    os.path.join(fastqc_trim_subdir, "{sample}_{lane}_R1_fastqc.zip")
+]
+if config["paired_end"] is True:
+    fastqc_trim_outputs.extend([
+        os.path.join(fastqc_trim_subdir, "{sample}_{lane}_R2_fastqc.html"),
+        os.path.join(fastqc_trim_subdir, "{sample}_{lane}_R2_fastqc.zip")
+])
+fastqc_trim_log = os.path.join(fastqc_trim_subdir, "{sample}_{lane}.log")
+
+
+rule fastqc_post_trimming:
+    priority: 3
+    input:
+        [r1_trimmed, r2_trimmed] if config["paired_end"] is True else [r1_trimmed]
+    output:
+        fastqc_trim_outputs
+    log:
+        fastqc_trim_log
+    params:
+        outdir  = fastqc_trim_subdir,
+        tempdir = get_temp_dir()
+    shell:
+        """
+        fastqc \
+            --format fastq \
+            --noextract \
+            --nogroup \
+            --quiet \
+            --threads {config[fastqc][threads]} \
+            --outdir {params.outdir} \
+            --dir {params.tempdir} \
+            {input} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 4 - Alignment of reads to reference genome with Bismark and Bowtie2
+# Alignment output BAM is flagged as temporary output so that
+# Snakemake removes it once no rule requires it anymore, to save space
+
+# Outputs
+align_dir    = "bismark_bowtie2"
+align_subdir = os.path.join(align_dir, "{sample}")
+align_bn     = "{sample}_{lane}"  # Basename
+align_prefix = os.path.join(align_subdir, align_bn)
+
+if config["paired_end"] is True:
+    align_bam    = "%s_pe.bam" % align_prefix
+    align_report = "%s_PE_report.txt" % align_prefix
+    multimapped_reads = ["%s_ambiguous_reads_1.fq.gz" % align_prefix,
+                         "%s_ambiguous_reads_2.fq.gz" % align_prefix]
+    unmapped_reads = ["%s_unmapped_reads_1.fq.gz" % align_prefix,
+                      "%s_unmapped_reads_2.fq.gz" % align_prefix]
+else:
+    align_bam         = "%s.bam" % align_prefix
+    align_report      = "%s_SE_report.txt" % align_prefix
+    multimapped_reads = "%s_ambiguous_reads.fq.gz" % align_prefix
+
+align_log = "%s.log" % align_prefix
+
+
+rule bismark_bowtie2:
+    priority: 4
+    input:
+        [r1_trimmed, r2_trimmed] if config["paired_end"] is True else r1_trimmed
+    output:
+        temp(align_bam),
+        align_report
+    log:
+        align_log
+    params:
+        inputs         = "-1 %s -2 %s" % (r1_trimmed, r2_trimmed) if config["paired_end"] is True else "--single_end %s" % r1_trimmed,
+        seed_mismatch  = config["bismark_bowtie2"]["seed_mismatch"],
+        phred          = config["phred"],
+        outdir         = align_subdir,
+        basename       = align_bn,
+        tempdir        = get_temp_dir(),
+        directional    = "--non_directional" if config["directional_library"] is False else "",
+        ref_genome_dir = config["ref_genome_dir"]
+    shell:
+        """
+        bismark \
+            --unmapped \
+            --ambiguous \
+            --bowtie2 \
+            -N {params.seed_mismatch} \
+            -p {config[bismark_bowtie2][threads]} \
+            --phred{params.phred}-quals \
+            --temp_dir {params.tempdir} \
+            --output_dir {params.outdir} \
+            --basename {params.basename} \
+            {params.directional} \
+            {params.ref_genome_dir} \
+            {params.inputs} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 5 - Merge lanes with Samtools after alignment if there are mulitple
+# lanes otherwise copy the file with the right name for the next step.
+# We use a copy and not a symlink because the output is declared as temporary
+# (with temp()) and a symlink was causing bugs. At the end the temporary file
+# will be deleted anyway
+
+
+def get_sample_bamfiles(wildcards):
+    """
+    Return the list of BAM files of the sample (one BAM per lane).
+    """
+    sample_lanes = config["fastq_of"][wildcards.sample].keys()
+    bamfiles = expand(align_bam, sample=wildcards.sample, lane=sample_lanes)
+    return bamfiles
+
+
+# Outputs
+bam_dir          = "bam"
+bam_subdir       = os.path.join(bam_dir, "{sample}")
+merged_lanes_bam = os.path.join(bam_subdir, "{sample}.bam")
+merge_lanes_log  = os.path.join(bam_subdir, "{sample}_merge_lanes.log")
+
+
+rule samtools_merge_lanes:
+    priority: 5
+    input:
+        bamfiles = get_sample_bamfiles
+    output:
+        merged_lanes_bam = temp(merged_lanes_bam)
+    log:
+        merge_lanes_log
+    run:
+        if len(get_sample_bamfiles(wildcards)) > 1:
+            # If multiple lanes, merge them
+            # Bismark requires reads to be sorted by name and not by position
+            # therefore we use the option '-n'
+            shell("samtools merge -n -f --threads {config[samtools][threads]} "
+                  "{output.merged_lanes_bam} {input.bamfiles} &> >(tee {log})")
+        else:
+            # If one lane: copy with the right name for the next step
+            shell("cp {input.bamfiles} {output.merged_lanes_bam} &> >(tee {log})")
+
+
+# -----------------------------------------------------------------------------
+# STEP 6 - Remove duplicates (PCR bias correction) with Bismark if requested
+# Should not be applied if RRBS or amplicon.
+
+# Outputs
+dedup_dir    = bam_dir
+dedup_subdir = bam_subdir
+dedup_bam    = os.path.join(dedup_subdir, "{sample}.deduplicated.bam")
+dedup_report = os.path.join(dedup_subdir, "{sample}.deduplication_report.txt")
+dedup_log    = os.path.join(dedup_subdir, "{sample}.deduplication.log")
+
+
+rule bismark_deduplicate:
+    priority: 5
+    input:
+        merged_lanes_bam = merged_lanes_bam
+    output:
+        dedup_bam    = temp(dedup_bam),
+        dedup_report = dedup_report
+    log:
+        dedup_log
+    params:
+        paired = "--paired" if config["paired_end"] is True else "--single",
+        outdir = dedup_subdir
+    shell:
+        """
+        deduplicate_bismark \
+            {params.paired} \
+            --bam \
+            --output_dir {params.outdir} \
+            {input.merged_lanes_bam} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 7 - Call Methylation with Bismark
+
+# Outputs
+meth_extract_dir    = "bismark_methylation_extractor"
+meth_extract_subdir = os.path.join(meth_extract_dir, "{sample}")
+meth_extract_bn     = "{sample}.deduplicated" if config["use_bismark_deduplicate"] is True else "{sample}"
+
+meth_extract_outputs = [
+    os.path.join(meth_extract_subdir, meth_extract_bn + ".bedGraph.gz"),
+    os.path.join(meth_extract_subdir, meth_extract_bn + ".bismark.cov.gz"),
+    os.path.join(meth_extract_subdir, meth_extract_bn + ".M-bias.txt"),
+    os.path.join(meth_extract_subdir, meth_extract_bn + "_splitting_report.txt"),
+    os.path.join(meth_extract_subdir, meth_extract_bn + ".CpG_report.txt.gz")
+]
+meth_extract_log = os.path.join(meth_extract_subdir, "{sample}.log")
+
+# Temporary output files to remove to make space
+meth_extract_temp_outputs = [
+    os.path.join(meth_extract_subdir, "CHG_OB_%s.txt.gz" % meth_extract_bn),
+    os.path.join(meth_extract_subdir, "CHG_OT_%s.txt.gz" % meth_extract_bn),
+    os.path.join(meth_extract_subdir, "CHH_OB_%s.txt.gz" % meth_extract_bn),
+    os.path.join(meth_extract_subdir, "CHH_OT_%s.txt.gz" % meth_extract_bn),
+    os.path.join(meth_extract_subdir, "CpG_OB_%s.txt.gz" % meth_extract_bn),
+    os.path.join(meth_extract_subdir, "CpG_OT_%s.txt.gz" % meth_extract_bn)
+]
+
+# If library is non-directional there are additional files: 2 more strands
+if config["directional_library"] is False:
+    meth_extract_temp_outputs.extend([
+        os.path.join(meth_extract_subdir, "CHG_CTOB_%s.txt.gz" % meth_extract_bn),
+        os.path.join(meth_extract_subdir, "CHG_CTOT_%s.txt.gz" % meth_extract_bn),
+        os.path.join(meth_extract_subdir, "CHH_CTOB_%s.txt.gz" % meth_extract_bn),
+        os.path.join(meth_extract_subdir, "CHH_CTOT_%s.txt.gz" % meth_extract_bn),
+        os.path.join(meth_extract_subdir, "CpG_CTOB_%s.txt.gz" % meth_extract_bn),
+        os.path.join(meth_extract_subdir, "CpG_CTOT_%s.txt.gz" % meth_extract_bn)
+    ])
+
+
+rule bismark_methylation_extractor:
+    priority: 6
+    input:
+        bam = dedup_bam if config["use_bismark_deduplicate"] is True else merged_lanes_bam
+    output:
+        meth_extract_outputs,
+        temp(meth_extract_temp_outputs)
+    log:
+        meth_extract_log
+    params:
+        paired         = "--paired-end" if config["paired_end"] is True else "--single-end",
+        no_overlap     = "--no_overlap" if config["paired_end"] is True else "",
+        outdir         = meth_extract_subdir,
+        ref_genome_dir = config["ref_genome_dir"]
+    shell:
+        """
+        bismark_methylation_extractor \
+            {params.paired} \
+            {params.no_overlap} \
+            --output {params.outdir} \
+            --bedGraph \
+            --cytosine_report \
+            --gzip \
+            --genome_folder {params.ref_genome_dir} \
+            --multicore {config[bismark_meth_extract][threads]} \
+            {input.bam} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 8 - Sort BAM files by genomic position
+
+# Bismark requires BAM files to be sorted by read tag (paired end reads are
+# then consecutive) therefore all 'previous' BAMs were sorted by read tag.
+# Since BAM files sorted by genomic position take less space and because many
+# tools that could be used in subsequent analysis require sorted BAMs,
+# the final BAM is sorted by position.
+# Snakemake will automatically delete all other BAM files once not required
+# anymore because they were declared as temp() in the outputs of rules.
+
+# Output
+final_bam_fn = "{sample}.deduplicated.sortedByPos.bam" if config["use_bismark_deduplicate"] is True else "{sample}.noDedup.sortedByPos.bam"
+final_bam    = os.path.join(bam_subdir, final_bam_fn)
+sort_log     = os.path.join(bam_subdir, "{sample}.log")
+
+
+rule samtools_sort_by_position:
+    priority: 7
+    input:
+        bam = dedup_bam if config["use_bismark_deduplicate"] is True else merged_lanes_bam
+    output:
+        final_bam = final_bam
+    log:
+        sort_log
+    shell:
+        """
+        samtools sort \
+            {input.bam} \
+            --threads {config[samtools][threads]} \
+            -o {output.final_bam} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 9 - Compute read coverage
+
+# Needed reference genome files
+ref_dict = os.path.join(config["ref_genome_dir"], "%s.fa.dict" % config["ref_build"])
+ref_seq  = os.path.join(config["ref_genome_dir"], "%s.fa"      % config["ref_build"])
+
+# Output directory
+coverage_dir    = "picard_coverage"
+coverage_subdir = os.path.join(coverage_dir, "{sample}")
+
+# Outputs if targeted sequencing
+hs_metrics_target_bed = os.path.join(coverage_subdir, "hs_metrics_target.bed")
+hs_metrics_target_log = os.path.join(coverage_subdir, "hs_metrics_target.log")
+hs_metrics_txt        = os.path.join(coverage_subdir, "{sample}_hs_metrics.txt")
+hs_metrics_log        = os.path.join(coverage_subdir, "{sample}_hs_metrics.log")
+
+# Outputs if no target BED provided: compute coverage on the whole reference genome
+wgs_metrics_txt = os.path.join(coverage_subdir, "{sample}_wgs_metrics.txt")
+wgs_metrics_log = os.path.join(coverage_subdir, "{sample}_wgs_metrics.log")
+
+# The first 2 rules are for targeted sequencing:
+# - format the BED of target regions to a BED compatible with Picard HsMetrics
+# - compute target kit coverage with Picard HsMetrics
+# Otherwise (third rule) compute coverage on the whole reference genome with Picard WgsMetrics
+
+rule format_target_bed_for_picard_hs_metrics:
+    priority: 8
+    input:
+        target_bed = config["target_bed"] if config["target_bed"] is not None else "",
+        ref_dict   = ref_dict
+    output:
+        hs_metrics_target_bed = hs_metrics_target_bed
+    log:
+        hs_metrics_target_log
+    params:
+        jvm_args = config["picard"]["jvm_args"]
+    shell:
+        """
+        picard {params.jvm_args} BedToIntervalList \
+            INPUT={input.target_bed} \
+            SEQUENCE_DICTIONARY={input.ref_dict} \
+            OUTPUT={output.hs_metrics_target_bed} \
+            &> >(tee {log})
+        """
+
+
+rule picard_hs_metrics:
+    input:
+        target_bed = hs_metrics_target_bed,
+        bam        = final_bam,
+        ref_seq    = ref_seq
+    output:
+        hs_metrics_txt = hs_metrics_txt
+    log:
+        hs_metrics_log
+    params:
+        jvm_args = config["picard"]["jvm_args"],
+        tempdir  = get_temp_dir()
+    shell:
+        """
+        picard {params.jvm_args} CollectHsMetrics \
+            BAIT_INTERVALS={input.target_bed} \
+            TARGET_INTERVALS={input.target_bed} \
+            INPUT={input.bam} \
+            OUTPUT={output.hs_metrics_txt} \
+            METRIC_ACCUMULATION_LEVEL=ALL_READS \
+            REFERENCE_SEQUENCE={input.ref_seq} \
+            TMP_DIR={params.tempdir} \
+            &> >(tee {log})
+        """
+
+
+rule picard_wgs_metrics:
+    input:
+        bam     = final_bam,
+        ref_seq = ref_seq
+    output:
+        wgs_metrics_txt = wgs_metrics_txt
+    log:
+        wgs_metrics_log
+    params:
+        jvm_args = config["picard"]["jvm_args"],
+        tempdir  = get_temp_dir()
+    shell:
+        """
+        picard {params.jvm_args} CollectWgsMetrics \
+            INPUT={input.bam} \
+            OUTPUT={output.wgs_metrics_txt} \
+            REFERENCE_SEQUENCE={input.ref_seq} \
+            TMP_DIR={params.tempdir} \
+            &> >(tee {log})
+        """
+
+# -----------------------------------------------------------------------------
+# STEP 10 - Create reporting plots with MultiQC.
+
+# Inputs: step directories on which to apply MultiQC
+# MultiQC automatically detects the log files of interest
+dirs_to_qc = [fastqc_dir, trim_dir, fastqc_trim_dir, align_dir, meth_extract_dir, coverage_dir]
+if config["use_bismark_deduplicate"] is True:
+    dirs_to_qc += [dedup_dir]
+
+# Outputs
+picard_metrics_fn   = "multiqc_picard_wgsmetrics.txt" if config["target_bed"] is None else "multiqc_picard_HsMetrics.txt"
+multiqc_metrics_txt = os.path.join(coverage_dir, "multiqc_data", picard_metrics_fn)
+multiqc_outputs     = [os.path.join(d, "multiqc_data", "multiqc_data.json") for d in dirs_to_qc] + [multiqc_metrics_txt]
+metrics_txt         = wgs_metrics_txt if config["target_bed"] is None else hs_metrics_txt
+
+rule multiqc:
+    input:
+        expand(fastqc_done,         zip, sample=SAMPLES, lane=LANES),
+        expand(fastqc_trim_outputs, zip, sample=SAMPLES, lane=LANES),
+        expand(align_report,        zip, sample=SAMPLES, lane=LANES),
+        expand(dedup_report,             sample=SAMPLES) if config["use_bismark_deduplicate"] is True else [],
+        expand(meth_extract_outputs,     sample=SAMPLES),
+        expand(metrics_txt,              sample=SAMPLES)
+    output:
+        multiqc_outputs
+    run:
+        # For each step, run MultiQC
+        for _dir in dirs_to_qc:
+            shell("multiqc %s --outdir %s --export --force" % (_dir, _dir))
+
+# -----------------------------------------------------------------------------
+# FINAL STEP - create QC report
+
+preproc_report_log = "preproc_report.log"
+
+
+rule preproc_html_report:
+    input:
+        report_template = srcdir("preproc_report.Rmd"),
+        config_yaml     = "preproc_config.yaml",
+        multiqc_outputs = multiqc_outputs,
+        # Adding the following inputs forces Snakemake to rerun everything
+        # if new samples are added
+        ignore1 = expand(fastqc_done,         zip, sample=SAMPLES, lane=LANES),
+        ignore2 = expand(fastqc_trim_outputs, zip, sample=SAMPLES, lane=LANES),
+        ignore3 = expand(align_report,        zip, sample=SAMPLES, lane=LANES),
+        ignore4 = expand(dedup_report,             sample=SAMPLES) if config["use_bismark_deduplicate"] is True else [],
+        ignore5 = expand(meth_extract_outputs,     sample=SAMPLES),
+        ignore6 = expand(metrics_txt,              sample=SAMPLES)
+    output:
+        preproc_report = preproc_report
+    log:
+        preproc_report_log
+    shell:
+        """
+        Rscript -e "rmarkdown::render(knit_root_dir='{config[outdir]}', \
+                                      input='{input.report_template}', \
+                                      output_dir='{config[outdir]}', \
+                                      output_file='{output.preproc_report}', \
+                                      params=list(configfile='{input.config_yaml}'))" \
+            &> >(tee {log})
+        """

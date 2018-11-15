@@ -1,0 +1,135 @@
+
+---
+title: "Differential methylation report"
+author: "iCONICS"
+date: "`r format(Sys.Date(), '%d %B, %Y')`"
+output:
+    html_document:
+        theme: lumen
+        toc: false
+        toc_float:
+            collapsed: false
+        df_print: paged
+params:
+    configfile: null
+---
+
+<style>
+    body .main-container {
+        max-width: 100%;
+    }
+    h1.title {
+        text-align: center;
+        color: DarkRed;
+    }
+    h1, h2, h3 {
+        color: DarkBlue;
+    }
+    hr {
+        height: 10px;
+        border: 0;
+        box-shadow: 0 10px 10px -10px #8c8b8b inset;
+    }
+    table {
+        width: 100%;
+    }
+    th {
+        background-color: LightBlue;
+    }
+    tr:nth-child(odd) {
+        background-color: #f2f2f2;
+    }
+    tr:hover {
+        background-color: LightGreen;
+    }
+</style>
+
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo=T)
+library(ggplot2)
+library(DT)
+config <- yaml::yaml.load_file(params$configfile)
+```
+
+<hr>
+
+## Parameters
+
+
+```{r summary, echo=F, results="asis"}
+samples <- names(config$cpg_report_of_sample)
+
+df_covariates <- read.table(config$covariates_tsv, sep="\t", header=T)
+
+df_params <- data.frame(
+    "Number of samples"=length(samples),
+    "Reference build"=config$ref_build,
+    "Merge complementary CpGs"=config$merge_complementary_cpgs,
+    "Minimum number of measured samples otherwise CpG is removed"=config$min_samples,
+    "dmrseq 'minNumRegion' argument: minimum number of CpGs in a DMR"=config$min_cpgs,
+    "dmrseq 'maxGap' argument: maximum basepair distance between neighboring CpGs to be included in the same DMR"=config$max_gap,
+    "dmrseq 'cutoff' argument"=config$cutoff,
+    "dmrseq 'smooth' argument"=config$smooth,
+    "dmrseq 'bpSpan' argument: smoothing window (bp)"=config$bp_span,
+    "dmrseq 'minInSpan' argument: minimum number of CpGs in a smoothing window"=config$min_in_span,
+    "dmrseq 'maxGapSmooth' argument: maximum basepair distance between neighboring CpGs when smoothing"=config$max_gap_smooth,
+    "dmrseq 'maxPerms' argument: maximum number of permutations"=config$max_perms,
+    "Test covariate"=config$test_covariate,
+    "Covariates to be adjusted for"=if(length(config$adjust_covariates) == 0) "NA" else paste(config$adjust_covariates, collapse=", "),
+    "dmrseq 'matchCovariate' argument: a covariate to be blocked when permutating, only permutations with balanced composition of this covariate will be used (2-group comparison only)"=if (is.null(config$match_covariate)) "NA" else config$match_covariate,
+    check.names=F)
+knitr::kable(t(df_params), align="c", col.names=NA)
+```
+
+<hr>
+
+## Samples
+```{r samples, echo=F, comment=""}
+writeLines(samples)
+```
+
+<hr>
+
+## Covariates
+
+```{r covariates, echo=F, comment=""}
+knitr::kable(df_covariates, align="c")
+```
+
+<hr>
+
+## PCA
+
+```{r, echo=F}
+pca_svg <- file.path(config$outdir, "pca_of_methylation_ratios.svg")
+knitr::include_graphics(pca_svg)
+```
+
+<hr>
+
+## Hierarchical clustering
+
+Using euclidean distance to compute the dissimilarity matrix and the Ward2 criterion for the clustering.
+
+```{r, echo=F}
+dendrogram_svg <- file.path(config$outdir, "dendrogram_of_methylation_ratios.svg")
+knitr::include_graphics(dendrogram_svg)
+```
+
+<hr>
+
+## Annotated DMRs which qval <= 0.05
+
+```{r, echo=F, warning=F}
+annotated_dmrs_bed <- file.path(config$outdir, "annotated_dmrs.bed")
+# Load DMRs
+# quote="" is required because of the "3' end" string in the table
+df_annotated_dmrs <- read.table(annotated_dmrs_bed, sep="\t", header=T, quote="")
+
+# Keep only DMRs which qval <= 0.05
+df_annotated_dmrs <- df_annotated_dmrs[df_annotated_dmrs$qval <= 0.05, ]
+
+# Create interactive table
+DT::datatable(df_annotated_dmrs, options=list(autoWidth=T, pageLength=nrow(df_annotated_dmrs)))
+```

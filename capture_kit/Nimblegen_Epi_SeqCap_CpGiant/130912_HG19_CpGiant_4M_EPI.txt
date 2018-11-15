@@ -1,0 +1,2 @@
+Total number of regions: 240513
+Total size (bp): 80454470
