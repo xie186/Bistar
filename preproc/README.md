@@ -88,10 +88,10 @@ TAR_URL=http://hgdownload.cse.ucsc.edu/goldenPath/hg19/bigZips/chromFa.tar.gz
 wget --no-clobber ${TAR_URL} --tries=5 --continue --timeout=30
 ```
 
-2. Merge the FASTA files of the chromosomes of interest as one unique FASTA file:
-   *&lt;ref build&gt;.fa*
+2. Extract the FASTA files of interest from archive (here *chromFa.tar.gz*) and
+   merge them, keeping the order, as one unique FASTA file: *&lt;ref build&gt;.fa*
 ```bash
-tar zxvf chromFa.tar.gz chr{1..22}.fa chrX.fa chrY.fa chrM.fa --to-stdout > hg19.fa 
+echo chr{1..22}.fa chrX.fa chrY.fa chrM.fa | xargs -n1 tar -zxvf chromFa.tar.gz --to-stdout > hg19.fa
 ```
 
 3. Create the index of your FASTA file with Samtools: *&lt;ref build&gt;.fa.fai*
