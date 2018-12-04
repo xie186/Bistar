@@ -18,7 +18,7 @@ with Linux whether you are working with a workstation or a cluster.
 ### Conda
 
 [Conda](https://conda.io/docs/) is used to make installation of pipelines and their
-dependencies automatical, with controlled versions and without admin privileges.
+dependencies automatic, with controlled versions and without admin privileges.
 If you don't have Conda installed, you can install [Miniconda3](https://conda.io/miniconda.html),
 a lightweight version of Conda with [Python3](https://www.python.org/). Miniconda3
 can be installed by downloading and running an installation script available at
