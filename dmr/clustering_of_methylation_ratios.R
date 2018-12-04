@@ -25,7 +25,7 @@ parser <- argparse::ArgumentParser()
 # Add required arguments
 parser$add_argument(
     "--bs-rds", required=T, metavar="<path>", help=paste(
-    "Path to the R RDS file containing the 'bs' BSseq object which provides",
+    "Path to the R RDS file containing the BSseq object which provides the",
     "methylation counts and covariates.")
 )
 parser$add_argument(
@@ -38,9 +38,10 @@ parser$add_argument(
 
 # Optional arguments
 parser$add_argument(
-    "--min-cpgs", required=F, metavar="<int>", default=100, help=paste(
-    "Minimum number of CpGs required to run the PCA considering that only",
-    "CpGs measured in all samples are used, by default 100.")
+    "--min-coverage", required=F, metavar="<int>", default=5, help=paste(
+    "Methylation ratios computed with a coverage lower than this value will",
+    "be imputed by the mean of the methylation ratios at the given CpG, by",
+    "default 5.")
 )
 
 # Parse
@@ -57,44 +58,67 @@ loginfo(str(args, nchar.max=200))
 # Load methylation counts
 bs <- readRDS(args$bs_rds)
 
-# Log number of CpGs and samples
-loginfo("Number of CpGs: %i.", nrow(bs))
-loginfo("Number of samples: %i.", ncol(bs))
+nb_cpgs    <- nrow(bs)
+nb_samples <- ncol(bs)
+loginfo("Methylation counts loaded: %i CpGs * %i samples", nb_cpgs, nb_samples)
 
 # -----------------------------------------------------------------------------
-# Compute methylation ratios of CpGs measured in all samples
-
-loginfo("Keeping only CpGs measured in all samples before clustering.")
+# Identify and remove CpGs with only low coverage or missing values
 
 # Get coverage matrix
 coverage <- bsseq::getCoverage(bs, type="Cov")
 
-# Identify CpGs that are not measured in all samples
-rows_to_remove <- which(DelayedMatrixStats::rowSums2(coverage == 0) > 0)
-
-# Remove those CpGs
-loginfo("Removing %i CpGs...", length(rows_to_remove))
-if (length(rows_to_remove) > 0) {
-    bs <- bs[-rows_to_remove, ]
+cpgs_to_remove <- which(
+    DelayedMatrixStats::rowSums2(coverage >= args$min_coverage) == 0)
+nb_cpgs_to_remove <- length(cpgs_to_remove)
+loginfo("Removing %i CpG(s) with only missing or low-coverage values...",
+        nb_cpgs_to_remove)
+if (nb_cpgs_to_remove > 0) {
+    bs <- bs[-cpgs_to_remove, ]
+    coverage <- bsseq::getCoverage(bs, type="Cov")
+    nb_cpgs <- nrow(bs)
 }
+loginfo("Number of CpGs left: %i.", nb_cpgs)
 
-# Check that there are enough CpGs
-nb_cpgs <- nrow(bs)
-if (nb_cpgs < args$min_cpgs) {
-    logerror("Not enough CpGs left: %i, required: %i.", nb_cpgs, args$min_cpgs)
-    stop()
-} else {
-    loginfo("Number of CpGs left for the clustering: %i.", nb_cpgs)
-}
+# -----------------------------------------------------------------------------
+# Compute methylation ratios and impute missing + low coverage values
 
-# Free memory
-rm(coverage, rows_to_remove)
+nb_values <- nb_cpgs * nb_samples
+loginfo("Matrix of methylation ratios: %i CpGs x %i samples = %i values",
+        nb_cpgs, nb_samples, nb_values)
+
+nb_missing  <- sum(coverage == 0)
+pct_missing <- nb_missing / nb_values
+loginfo("Number of missing values (i.e. coverage is 0): %i ( %f %%).",
+        nb_missing, pct_missing)
+
+nb_low_coverage  <- sum(coverage > 0 & coverage < args$min_coverage)
+pct_low_coverage <- nb_low_coverage / nb_values
+loginfo("Number of values with low but non-zero coverage (i.e. 0 < coverage < %i): %i (%f %%).",
+        args$min_coverage, nb_low_coverage, pct_low_coverage)
+
+nb_to_impute  <- nb_missing + nb_low_coverage
+pct_to_impute <- nb_to_impute / nb_values
+loginfo("Number of methylation ratios to impute: %i (%f %%).",
+        nb_to_impute, pct_to_impute)
 
 # Compute methylation ratios
-ratios <- bsseq::getCoverage(bs, type="M") / bsseq::getCoverage(bs, type="Cov")
+ratios <- bsseq::getCoverage(bs, type="M") / coverage
+
+# Set ratios to NA if computed with a coverage < min_coverage
+ratios[coverage < args$min_coverage] <- NA
+
+# Free memory
+rm(coverage)
 
 # Tranpose to have samples in rows
 ratios <- t(ratios)
+
+# Impute by mean
+for(i in 1:ncol(ratios)){
+    ratios[is.na(ratios[, i]), i] <- mean(ratios[, i], na.rm = TRUE)
+}
+loginfo("Imputation done.")
 
 # -----------------------------------------------------------------------------
 # Hierarchical clustering: compute and plot dendrogram
@@ -154,9 +178,10 @@ dendrogram <- dendrapply(dendrogram, add_color_to_dendrogram_leaves)
 dendro_svg <- file.path(args$outdir, "dendrogram_of_methylation_ratios.svg")
 loginfo("Creating dendrogram plot...")
 svg(file=dendro_svg)
-dendro_plot <- plot(
-    dendrogram,
-    main="Clustering of methylation ratios of CpGs measured in all samples")
+dendro_title <- sprintf(
+    "Hierarchical clustering of methylation ratios: %i CpGs x %i samples",
+    nb_cpgs, nb_samples)
+dendro_plot <- plot(dendrogram, main=dendro_title)
 loginfo("Saving dendrogram plot as %s", dendro_svg)
 print(dendro_svg)
 dev.off()
@@ -177,12 +202,13 @@ percentages <-pca$sdev / sum(pca$sdev) * 100
 
 # Plot PCA and save as an SVG
 pca_svg <- file.path(args$outdir, "pca_of_methylation_ratios.svg")
-title <- "PCA of methylation ratios of CpGs measured in all samples"
+pca_title <- sprintf(
+    "PCA of methylation ratios: %i CpGs x %i samples", nb_cpgs, nb_samples)
 loginfo("Creating PCA plot...")
 svg(file=pca_svg)
 pca_plot <- ggplot(df, aes(x=PC1, y=PC2, color=color, label=rownames(df))) +
     geom_point() + geom_text(vjust="inward", hjust="inward", size=2) +
-    theme_bw() + labs(title=title,
+    theme_bw() + labs(title=pca_title,
                       x=sprintf("PC1 %.2f %%", percentages[1]),
                       y=sprintf("PC2 %.2f %%", percentages[2]),
                       color=args$test_covariate)
