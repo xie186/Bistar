@@ -133,23 +133,22 @@ covariates <- covariates[which(covariates$sampleID %in% args$samples), ]
 # Reorder the samples to match the order in the BSseq object
 covariates <- covariates[match(args$samples, covariates$sampleID), ]
 
+# Make row.names be sample IDs (required by read.bismark colData argument)
+row.names(covariates) <- covariates$sampleID
+
 # -----------------------------------------------------------------------------
 
 # Read methylation calls
 bs <- bsseq::read.bismark(files=args$cpg_reports,
-                          sampleNames=args$samples,
+                          colData=covariates,
                           rmZeroCov=TRUE,
                           strandCollapse=args$merge_complementary_cpgs,
-                          fileType="cytosineReport",
-                          mc.cores=args$threads,
+                          nThread=args$threads,
                           verbose=TRUE)
 
 # Log
 loginfo("Number of CpGs: %i.", nrow(bs))
 loginfo("Number of samples: %i.", ncol(bs))
-
-# Add covariates to BSseq object
-bsseq::pData(bs) <- S4Vectors::cbind(bsseq::pData(bs), covariates)
 
 # -----------------------------------------------------------------------------
 # Filter loci without enough measured samples
