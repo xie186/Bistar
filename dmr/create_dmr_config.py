@@ -25,6 +25,13 @@ Examples of regex (--cpg-report-regex argument):
 All parameters and paths to files to process are stored in the output YAML.
 """
 
+def get_goldmine_default_cache_dir():
+    bistar_dir = os.environ.get("BISTAR_DIR", None)
+    if bistar_dir is not None:
+        return os.path.join(bistar_dir, "Goldmine")
+    else:
+        return None
+
 # Default values
 DEFAULT_OF = dict(
     bsseq_threads=1,
@@ -38,7 +45,7 @@ DEFAULT_OF = dict(
     min_in_span=30,
     max_gap_smooth=2500,
     max_perms=10,
-    goldmine_dir=os.environ.get("BISTAR_DIR", None)
+    goldmine_dir=get_goldmine_default_cache_dir()
 )
 
 
