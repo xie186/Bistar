@@ -13,7 +13,7 @@ workdir: config["outdir"]
 # -----------------------------------------------------------------------------
 # Output files
 bs_rds                  = "bs.rds"
-create_bsseq_object_log = "logs/logs/create_bsseq_object.log"
+create_bsseq_object_log = "logs/create_bsseq_object.log"
 dmrs_rds                = "dmrs.rds"
 dmrseq_log              = "logs/dmrseq.log"
 annotated_dmrs_bed      = "annotated_dmrs.bed"
