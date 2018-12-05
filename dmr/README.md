@@ -136,10 +136,10 @@ to match them (see [Example 3](../preproc/README.md#example-3) of the
 | --cutoff | dmrseq 'cutoff' argument, by default 0.1 . |
 | --no-smoothing | Set dmrseq 'smooth' argument to False. |
 | --bp-span | dmrseq 'bpSpan' argument: smoothing window in basepairs, by default 1000. |
-| --min-in-span | dmrseq 'minInSpan' argument: minimum numober of CpGs in a smoothing span window, by default 30. |
+| --min-in-span | dmrseq 'minInSpan' argument: minimum number of CpGs in a smoothing span window, by default 30. |
 | --max-gap-smooth | dmrseq 'maxGapSmooth' argument: max basepair distance between neighboring CpGs when smoothing, by default 2500. |
 | --max-perms | dmrseq 'maxPerms' argument: maximum number of permutations to generate the global null distribution, by default 10. |
-| --adjust-covariates | dmrseq 'adjusteCovariate' argument: the names of the covariates to be adjusted for when testing for the association of methylation value with the test covariate. |
+| --adjust-covariates | dmrseq 'adjustCovariate' argument: the names of the covariates to be adjusted for when testing for the association of methylation value with the test covariate. |
 | --match-covariate | dmrseq 'matchCovariate' argument: a covariate that will be blocked when permutating to test for the association of methylation with the test covariate. Only permutations with balanced composition of 'matchCovariate' will be used. Only possible for a two-group comparison and for one covariate. |
 | --goldmine-dir | Directory to use a cache directory for Goldmine annotation package. It avoids re-downloading annotation databases from UCSC if you already have them. By default ${BISTAR_DIR}/Goldmine |
 | --goldmine-sync | Check if newer versions of UCSC annotation tables are available and if so download them in <--goldmine-dir>. It requires a web connection which is not always the case if you run on a cluster. |
@@ -177,17 +177,15 @@ create_dmr_config.py \
 ## Execution time and memory
 
 More than 99% of the execution time is the computation of DMRs by dmrseq. Using
-more threads will decrease the computation time but will increase the RAM
-consumption. By multiplying the number of threads by N you roughly multiply the
-RAM consumption by N. You are generally limited by the RAM consumption and cannot
-allocate as many threads as you have CPUs whether it is on your workstation or
-a node of your cluster.
+more threads will decrease the computation time but will significantly increase
+the RAM consumption.
 
 Examples of memory and time consumptions of dmrseq:
 
-| # samples | # threads | max perms | max RAM consumption | execution time |     # CpGs     |
-| :-------: | :-------: | :-------: | :-----------------: | :------------: | :------------: |
-|     16    |     1     |     10    |         71 GB       |        8h      | ~ 7.3 millions |
+| # samples | # threads | max perms | max RAM consumption | execution time | Merging complementary CpGs |     # CpGs     | Type of test covariate |
+| :-------: | :-------: | :-------: | :-----------------: | :------------: | :------------------------: | :------------: | :--------------------: |
+|     16    |     4     |     10    |        14 GB        |      5h30      |            Yes             | ~ 3.8 millions |      2-group factor    |
+|     12    |     4     |     10    |         7 GB        |      2h        |            Yes             | ~ 1.5 million  |      2-group factor    |
 
 
 ## How to run
@@ -220,7 +218,7 @@ Bistar you don't need to set it.
 Like for the preprocessing pipeline, the example bellow is for a SLURM cluster,
 if you are using another scheduler you have to adapt the '--cluster' argument
 with the command used on your cluster to create a job for a shellscript. Snakemake
-will automatically replace the variables '{cluster.<variable>}' with the value
+will automatically replace the variables '{cluster.\<variable\>}' with the value
 found in *dmr_cluster_config.yaml* for each step.
 
 You can edit the *dmr_cluster_config.yaml* file to adapt the number of CPUs,

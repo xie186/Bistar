@@ -135,7 +135,7 @@ to run the pipeline, instead you assume a regularity in the filesystem's structu
 and you identify files and their metadata using a Snakemake regular expression.
 It is used to infer the list of files to process and in our case the sample ID,
 lane ID (optional) and endedness (for paired-end sequencing) of the reads from
-the filepath/filename. You can name the FASTQ as you wish <as long as these
+the filepath/filename. You can name the FASTQ as you wish as long as these
 metadata explicitly appear in the filename/filepath.
 
 #### Example 1
@@ -325,8 +325,8 @@ snakemake \
 The example bellow is for a SLURM cluster, if you are using another scheduler you
 have to adapt the '--cluster' argument with the command used on your cluster to
 create a job for a shellscript. Snakemake will automatically replace the variables
-'{cluster.<variable>}' with the value found in *preproc_cluster_config.yaml* for
-each step.
+'{cluster.\<variable\>}' with the value found in *preproc_cluster_config.yaml*
+for each step.
 
 You can edit the *preproc_cluster_config.yaml* file to adapt the number of CPUs,
 wall time or RAM memory that are requested to the cluster for each step of the
@@ -334,7 +334,8 @@ pipeline. Note that if you change the number of CPUs requested for a given step
 it should be consistent with the number of threads used in the command which is
 provided by the *preproc_config.yaml* configuration file. The default values for
 memory and walltime were set to be largely enough when using 8 threads for all
-steps on our internal projects: targeted sequencing with ~80 million basepairs.
+steps on our internal projects: targeted sequencing with ~80 million basepairs
+and ~5 million CpGs.
 
 Run the complete pipeline
 ```bash
