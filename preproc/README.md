@@ -267,7 +267,6 @@ create_preproc_config.py \
     --ref-genome-dir /path/to/reference/genome/folder \
     --ref-build hg19 \
     --read-length 150 \
-    --threads 4 \
     --phred 33 \
     --r1-id R1 \
     --r2-id R2 \
@@ -276,7 +275,7 @@ create_preproc_config.py \
     --min-length 50 \
     --error-rate 0.1 \
     --trim-n \
-    --max-mismatch 1 \
+    --seed-mismatch 1 \
     --clip-r1-5p 2 \
     --clip-r2-5p 2 \
     --clip-r2-3p 1
