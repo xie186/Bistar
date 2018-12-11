@@ -164,7 +164,8 @@ create_dmr_config.py \
     --outdir $DMR_OUTDIR \
     --ref-build hg19 \
     --min-samples 5 \
-    --threads 4 \
+    --bsseq-threads 4 \
+    --dmrseq-threads 4 \
     --cutoff 0.1 \
     --max-perms 10 \
     --min-cpgs 5 \
