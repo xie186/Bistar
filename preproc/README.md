@@ -364,6 +364,17 @@ to help qualifying the results with plots and tables. They may indicate that you
 should rerun the preprocessing with different parameters before using the other
 pipeline e.g. if there is a methylation bias at read ends that should be trimmed.
 
+
+### Errors
+
+If the pipeline fails to run at any step, check the log file(s) of that step to
+understand the cause of failure. A log file (.log extension) is created for each
+command ran by the pipeline in the output directory of that command.
+If you are running on a cluster, you will also find a copy of the standard output
+and standard error for each step of the pipeline in the '<output dir>/cluster_logs'
+directory.
+
+
 ## Differential methylation analysis pipeline
 
 [README](../dmr/README.md)

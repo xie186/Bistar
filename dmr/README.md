@@ -292,3 +292,12 @@ snakemake annotate_dmrs \
     --printshellcmds \
     --dryrun
 ```
+
+### Errors
+
+If the pipeline fails to run at any step, check the log file(s) of that step to
+understand the cause of failure. A log file (.log extension) is created for each
+command ran by the pipeline in the output directory of that command.
+If you are running on a cluster, you will also find a copy of the standard output
+and standard error for each step of the pipeline in the '<output dir>/cluster_logs'
+directory.
