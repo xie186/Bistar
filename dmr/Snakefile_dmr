@@ -195,6 +195,7 @@ rule dmr_html_report:
         Rscript -e "rmarkdown::render(knit_root_dir='{config[outdir]}', \
                                       input='{input.report_template}', \
                                       output_dir='{config[outdir]}', \
+                                      intermediates_dir='{config[outdir]}', \
                                       output_file='{output.dmr_report}', \
                                       params=list(configfile='{input.config_yaml}'))" \
         &> >(tee {log})
