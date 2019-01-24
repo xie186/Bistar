@@ -41,7 +41,7 @@ source ~/miniconda3/bin/activate
 2. Create the processing environment, here called Bistar, and install the pipelines
 with all their dependencies. It can take a while.
 ```bash
-conda create -n Bistar -c icm-iconics bistar
+conda create -n Bistar -c icm-iconics -c conda-forge/label/cf201901 bistar
 ```
 
 3. Activate the environment
